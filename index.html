@@ -59,13 +59,18 @@ ADD R3, R0, R1
   btn.onclick = () => {
     try {
       const res = assembleText(src.value);
-      if (res.tag === 0) {
+
+      if (res && res.tag === 0) {
         out.textContent = res.fields[0];
+      } else if (res && res.tag === 1) {
+        out.textContent = "ERROR:\n" + res.fields[0];
       } else {
-        out.textContent = "ERROR:\n" + res.fields[0].join("\n");
+        out.textContent = "Unknown result: " + String(res);
       }
     } catch (e) {
-      out.textContent = "JS ERROR:\n" + e;
+      out.textContent =
+        "JS ERROR:\n" +
+        (e && e.stack ? e.stack : String(e));
     }
   };
 </script>
