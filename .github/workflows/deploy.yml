@@ -25,6 +25,11 @@ jobs:
 
       - run: npm ci
       - run: npm run build
+      - name: Copy favicon if present
+        run: |
+          if [ -f favicon.ico ]; then
+            cp favicon.ico dist/favicon.ico
+          fi
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

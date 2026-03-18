@@ -1,10 +1,5 @@
-import { defineConfig } from "vite";
+const { defineConfig } = require("vite");
 
-export default defineConfig({
-  base: "/eep-assembler-web/",
-  resolve: {
-    alias: {
-      "fable-library-js": "@fable-org/fable-library-js",
-    },
-  },
+module.exports = defineConfig({
+  base: "./",
 });
