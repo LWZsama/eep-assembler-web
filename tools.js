@@ -3,6 +3,9 @@ import { assembleText } from "./assembler.js";
 const src = document.getElementById("src");
 const highlight = document.getElementById("highlight");
 const lineNumbers = document.getElementById("line-numbers");
+const editorShell = document.querySelector(".editor-shell");
+const workspace = document.querySelector(".workspace");
+const workspaceDivider = document.querySelector(".workspace-divider");
 const activeLine = document.getElementById("active-line");
 const cursorStatus = document.getElementById("cursor-status");
 const documentStatus = document.getElementById("document-status");
@@ -18,6 +21,13 @@ const closeIssieDialogBtn = document.getElementById("close-issie-dialog");
 
 let lastMachineCodeOutput = "";
 let caretRefreshFrame = 0;
+let editorBaseMinHeight = 0;
+let workspaceSplitRatio = null;
+let workspaceResizeFrame = 0;
+
+const DEFAULT_WORKSPACE_SPLIT = 1.45 / (1.45 + 0.9);
+const WORKSPACE_DIVIDER_WIDTH = 16;
+const WORKSPACE_MIN_PANE_WIDTH = 320;
 
 const OPCODES = new Set([
   "ADC", "ADD", "AND", "CALL", "CMP", "DEC", "DIV", "HALT", "INC",
@@ -28,6 +38,13 @@ const OPCODES = new Set([
 
 const DIRECTIVES = new Set([
   "DB", "DS", "DW", "END", "EQU", "INCLUDE", "MACRO", "ENDM", "ORG"
+]);
+
+const ASSEMBLY_INSTRUCTIONS = new Set([
+  ...OPCODES,
+  ...DIRECTIVES,
+  "ASR", "CLRI", "DCW", "EXT", "JEQ", "JCC", "JCS", "JGT", "JHI", "JLS",
+  "JMI", "JPL", "JSR", "LDR", "LSL", "LSR", "RETINT", "SBC", "SETI", "STR", "XSR"
 ]);
 
 const TOKEN_REGEX = /(?:[A-Za-z_][A-Za-z0-9_]*:)|(?:\.[A-Za-z_][A-Za-z0-9_]*)|(?:#-?(?:0x[\da-fA-F]+|\d+))|(?:\b0x[\da-fA-F]+\b|\b\d+\b)|(?:\bR(?:1[0-5]|[0-9])\b)|(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(?:\b[A-Za-z_][A-Za-z0-9_]*\b)|(?:[,()[\]{}:+\-*/])/y;
@@ -43,6 +60,7 @@ function findCommentStart(line) {
 
   for (let index = 0; index < line.length; index += 1) {
     const char = line[index];
+    const next = line[index + 1] || "";
     const prev = index > 0 ? line[index - 1] : "";
 
     if ((char === '"' || char === "'") && prev !== "\\") {
@@ -54,7 +72,7 @@ function findCommentStart(line) {
       continue;
     }
 
-    if (char === ";" && !quote) {
+    if (!quote && (char === ";" || (char === "/" && next === "/"))) {
       return index;
     }
   }
@@ -172,6 +190,126 @@ function updateDocumentStatus() {
   documentStatus.textContent = `${lineCount} lines | ${charCount} chars | UTF-8`;
 }
 
+function updateEditorHeight() {
+  if (!editorShell) {
+    return;
+  }
+
+  const styles = window.getComputedStyle(src);
+  const lineHeight = Number.parseFloat(styles.lineHeight) || 24;
+  const paddingTop = Number.parseFloat(styles.paddingTop) || 0;
+  const paddingBottom = Number.parseFloat(styles.paddingBottom) || 0;
+
+  if (!editorBaseMinHeight) {
+    editorBaseMinHeight = editorShell.getBoundingClientRect().height;
+  }
+
+  const contentHeight = paddingTop + paddingBottom + getLineCount() * lineHeight;
+  const minHeight = Math.max(editorBaseMinHeight, contentHeight);
+  editorShell.style.minHeight = `${minHeight}px`;
+}
+
+function isWorkspaceStacked() {
+  return window.matchMedia("(max-width: 1024px)").matches;
+}
+
+function clampWorkspaceSplit(ratio, availableWidth) {
+  const minRatio = WORKSPACE_MIN_PANE_WIDTH / availableWidth;
+  const maxRatio = 1 - minRatio;
+  return Math.min(Math.max(ratio, minRatio), maxRatio);
+}
+
+function applyWorkspaceSplit() {
+  if (!workspace || !workspaceDivider) {
+    return;
+  }
+
+  if (isWorkspaceStacked()) {
+    workspace.style.gridTemplateColumns = "";
+    return;
+  }
+
+  if (workspaceSplitRatio === null) {
+    return;
+  }
+
+  const workspaceWidth = workspace.getBoundingClientRect().width;
+  const availableWidth = workspaceWidth - WORKSPACE_DIVIDER_WIDTH;
+  const ratio = clampWorkspaceSplit(workspaceSplitRatio, availableWidth);
+  const editorWidth = availableWidth * ratio;
+
+  workspaceSplitRatio = ratio;
+  workspace.style.gridTemplateColumns = `${editorWidth}px ${WORKSPACE_DIVIDER_WIDTH}px minmax(${WORKSPACE_MIN_PANE_WIDTH}px, 1fr)`;
+  workspaceDivider.setAttribute("aria-valuenow", String(Math.round(ratio * 100)));
+  workspaceDivider.setAttribute("aria-valuetext", `${Math.round(ratio * 100)}% editor width`);
+}
+
+function setWorkspaceSplitFromPointer(clientX, pointerOffset) {
+  if (!workspace) {
+    return;
+  }
+
+  const workspaceRect = workspace.getBoundingClientRect();
+  const availableWidth = workspaceRect.width - WORKSPACE_DIVIDER_WIDTH;
+  const editorWidth = clientX - workspaceRect.left - pointerOffset;
+
+  workspaceSplitRatio = clampWorkspaceSplit(editorWidth / availableWidth, availableWidth);
+  applyWorkspaceSplit();
+}
+
+function handleWorkspaceDividerPointerDown(event) {
+  if (!workspace || !workspaceDivider || isWorkspaceStacked() || event.button !== 0) {
+    return;
+  }
+
+  event.preventDefault();
+
+  const dividerRect = workspaceDivider.getBoundingClientRect();
+  const pointerOffset = event.clientX - dividerRect.left;
+
+  workspace.classList.add("is-resizing");
+  document.body.classList.add("is-resizing");
+  workspaceDivider.setPointerCapture?.(event.pointerId);
+
+  const handlePointerMove = (moveEvent) => {
+    setWorkspaceSplitFromPointer(moveEvent.clientX, pointerOffset);
+  };
+
+  const stopDragging = () => {
+    workspace.classList.remove("is-resizing");
+    document.body.classList.remove("is-resizing");
+    window.removeEventListener("pointermove", handlePointerMove);
+    window.removeEventListener("pointerup", stopDragging);
+    window.removeEventListener("pointercancel", stopDragging);
+    workspaceDivider.releasePointerCapture?.(event.pointerId);
+  };
+
+  window.addEventListener("pointermove", handlePointerMove);
+  window.addEventListener("pointerup", stopDragging);
+  window.addEventListener("pointercancel", stopDragging);
+  setWorkspaceSplitFromPointer(event.clientX, pointerOffset);
+}
+
+function handleWorkspaceDividerKeydown(event) {
+  if (!workspaceDivider || isWorkspaceStacked()) {
+    return;
+  }
+
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+    return;
+  }
+
+  event.preventDefault();
+
+  if (workspaceSplitRatio === null) {
+    workspaceSplitRatio = DEFAULT_WORKSPACE_SPLIT;
+  }
+
+  const amount = event.shiftKey ? 0.05 : 0.02;
+  workspaceSplitRatio += event.key === "ArrowRight" ? amount : -amount;
+  applyWorkspaceSplit();
+}
+
 function updateActiveLine() {
   const { line } = getCursorPosition();
   const styles = window.getComputedStyle(src);
@@ -205,6 +343,7 @@ function syncEditor() {
   highlight.scrollLeft = src.scrollLeft;
   lineNumbers.scrollTop = src.scrollTop;
   updateLineNumbers();
+  updateEditorHeight();
   refreshCaretUi();
   updateDocumentStatus();
 }
@@ -233,12 +372,12 @@ function parseAddressToken(token) {
     : Number.parseInt(token, 10);
 }
 
-function parseMachineCodeWords(machineCodeText) {
+function parseMachineCodeWords(machineCodeText, { sortByAddress = true } = {}) {
   if (!machineCodeText.trim()) {
     return [];
   }
 
-  return machineCodeText
+  const entries = machineCodeText
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
@@ -261,8 +400,93 @@ function parseMachineCodeWords(machineCodeText) {
         word: rawWord.toLowerCase().padStart(4, "0")
       };
     })
-    .filter((entry) => entry !== null)
-    .sort((left, right) => left.address - right.address);
+    .filter((entry) => entry !== null);
+
+  return sortByAddress
+    ? entries.sort((left, right) => left.address - right.address)
+    : entries;
+}
+
+function findAssemblyCommentStart(line) {
+  let quote = null;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    const next = line[index + 1] || "";
+    const prev = index > 0 ? line[index - 1] : "";
+
+    if ((char === '"' || char === "'") && prev !== "\\") {
+      if (quote === char) {
+        quote = null;
+      } else if (!quote) {
+        quote = char;
+      }
+      continue;
+    }
+
+    if (!quote && (char === ";" || (char === "/" && next === "/"))) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+function sourceLineProducesMachineCode(line) {
+  const commentStart = findAssemblyCommentStart(line);
+  const code = (commentStart >= 0 ? line.slice(0, commentStart) : line)
+    .replace(/^\s*[A-Za-z_][A-Za-z0-9_]*:\s*/, "")
+    .trim();
+
+  if (!code || /^(?:\.?ORG)\b/i.test(code)) {
+    return false;
+  }
+
+  const tokens = code.split(/\s+/);
+  const firstToken = tokens[0].toUpperCase();
+
+  if (tokens.length > 1 && !ASSEMBLY_INSTRUCTIONS.has(firstToken) && /^(?:\.?ORG)$/i.test(tokens[1])) {
+    return false;
+  }
+
+  return tokens.length > 1 || ASSEMBLY_INSTRUCTIONS.has(firstToken);
+}
+
+function formatMachineCodeEntry(entry) {
+  const address = `0x${entry.address.toString(16).padStart(2, "0")}`;
+  return `${address} 0x${entry.word}`;
+}
+
+function renderMachineCodeOutput(machineCodeText) {
+  const sourceLines = src.value.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  const entries = parseMachineCodeWords(machineCodeText, { sortByAddress: false });
+  let entryIndex = 0;
+
+  const rows = sourceLines.map((sourceLine, index) => {
+    const hasMachineCode = sourceLineProducesMachineCode(sourceLine);
+    const entry = hasMachineCode ? entries[entryIndex++] : null;
+    const codeLabel = entry ? formatMachineCodeEntry(entry) : "—";
+    const rowClass = entry ? "output-row" : "output-row output-empty";
+
+    return `<div class="${rowClass}" role="row">
+      <span class="output-line" role="cell">${index + 1}</span>
+      <code class="output-code" role="cell">${escapeHtml(codeLabel)}</code>
+    </div>`;
+  });
+
+  while (entryIndex < entries.length) {
+    const entry = entries[entryIndex++];
+    rows.push(`<div class="output-row" role="row">
+      <span class="output-line" role="cell">—</span>
+      <code class="output-code" role="cell">${escapeHtml(formatMachineCodeEntry(entry))}</code>
+    </div>`);
+  }
+
+  out.innerHTML = rows.join("");
+}
+
+function renderOutputMessage(message) {
+  out.innerHTML = `<pre class="output-message">${escapeHtml(message)}</pre>`;
 }
 
 function buildIssieUrl(demo) {
@@ -320,22 +544,22 @@ function assembleSource() {
     if (res && res.tag === 0) {
       lastMachineCodeOutput = res.fields[0];
       updateIssieLink("");
-      out.textContent = lastMachineCodeOutput;
+      renderMachineCodeOutput(lastMachineCodeOutput);
       return true;
     }
 
     if (res && res.tag === 1) {
       clearCompiledArtifacts();
-      out.textContent = `ERROR\n${res.fields[0]}`;
+      renderOutputMessage(`ERROR\n${res.fields[0]}`);
       return false;
     }
 
     clearCompiledArtifacts();
-    out.textContent = `Unknown result: ${String(res)}`;
+    renderOutputMessage(`Unknown result: ${String(res)}`);
     return false;
   } catch (error) {
     clearCompiledArtifacts();
-    out.textContent = `JavaScript error\n${error && error.stack ? error.stack : String(error)}`;
+    renderOutputMessage(`JavaScript error\n${error && error.stack ? error.stack : String(error)}`);
     return false;
   }
 }
@@ -363,7 +587,7 @@ async function saveRam() {
   const content = lastMachineCodeOutput.trim();
 
   if (!content) {
-    out.textContent = "Run Assemble first to generate machine code before exporting.";
+    renderOutputMessage("Run Assemble first to generate machine code before exporting.");
     return;
   }
 
@@ -417,7 +641,7 @@ function handleEditorKeydown(event) {
 runBtn.addEventListener("click", assembleSource);
 importBtn.addEventListener("click", () => {
   importTxt().catch((error) => {
-    out.textContent = `Import failed\n${error?.message || String(error)}`;
+    renderOutputMessage(`Import failed\n${error?.message || String(error)}`);
   });
 });
 
@@ -427,11 +651,24 @@ downloadBtn.addEventListener("click", () => {
       return;
     }
 
-    out.textContent = `Export failed\n${error?.message || String(error)}`;
+    renderOutputMessage(`Export failed\n${error?.message || String(error)}`);
   });
 });
 
 openIssieBtn.addEventListener("click", openIssieDialog);
+
+workspaceDivider?.addEventListener("pointerdown", handleWorkspaceDividerPointerDown);
+workspaceDivider?.addEventListener("keydown", handleWorkspaceDividerKeydown);
+window.addEventListener("resize", () => {
+  if (workspaceResizeFrame) {
+    cancelAnimationFrame(workspaceResizeFrame);
+  }
+
+  workspaceResizeFrame = window.requestAnimationFrame(() => {
+    workspaceResizeFrame = 0;
+    applyWorkspaceSplit();
+  });
+});
 
 closeIssieDialogBtn.addEventListener("click", () => {
   issieDialog.close();
