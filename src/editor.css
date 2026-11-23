@@ -1,0 +1,43 @@
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) 16px minmax(0, .9fr);
+  align-items: stretch;
+}
+.workspace > section { min-width: 0; overflow: hidden; }
+.workspace-divider { position: relative; cursor: col-resize; touch-action: none; }
+.workspace-divider::before {
+  content: ""; position: absolute; top: 45%; bottom: 45%; left: calc(50% - 1px);
+  width: 2px; border-radius: 2px; background: var(--input);
+}
+.workspace-divider:hover::before, .workspace-divider:focus-visible::before { background: var(--ring); }
+body.is-resizing { user-select: none; cursor: col-resize; }
+.editor-shell, .output { font: 14px/25px ui-monospace, "Cascadia Code", Consolas, monospace; }
+.editor-shell {
+  display: grid; grid-template-columns: 3.25rem minmax(0, 1fr);
+  min-height: 178px; flex: 1; background: var(--background);
+}
+.editor-stage { position: relative; min-width: 0; overflow: hidden; }
+.line-numbers, .editor-layer {
+  margin: 0; padding: 14px 12px; font: inherit; white-space: pre; tab-size: 2; border: none;
+}
+.line-numbers { overflow: hidden; color: var(--muted-foreground); text-align: right; border-right: 1px solid var(--border); }
+.editor-layer { position: absolute; inset: 0; width: 100%; height: 100%; overflow: auto; }
+#highlight { pointer-events: none; scrollbar-width: none; }
+#src { background: transparent; color: transparent; caret-color: var(--foreground); outline: none; resize: none; }
+#src::selection { color: transparent; background: rgb(120 130 155 / 35%); }
+.editor-shell:focus-within { box-shadow: inset 0 0 0 1px var(--ring); }
+#active-line { position: absolute; inset-inline: 0; pointer-events: none; background: rgb(255 255 255 / 4%); }
+.token-op, .token-directive { color: #c4b5fd; }
+.token-num, .token-string { color: #fcd9a0; }
+.token-label, .token-reg { color: #a9c8f7; }
+.token-comment, .token-punct { color: var(--muted-foreground); }
+.output { min-height: 178px; flex: 1; background: var(--background); padding: 14px 0; }
+.output-row { display: grid; grid-template-columns: 3.25rem minmax(0, 1fr); }
+.output-line { padding-right: 12px; text-align: right; border-right: 1px solid var(--border); color: var(--muted-foreground); }
+.output-code, .output-message { padding-inline: 12px; font: inherit; }
+.output-empty .output-code { color: var(--muted-foreground); }
+.output-message { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 1024px) {
+  .workspace { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+  .workspace-divider { display: none; }
+}

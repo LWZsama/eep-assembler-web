@@ -1,30 +1,5 @@
 import { assembleText } from "./assembler.js";
 
-const src = document.getElementById("src");
-const highlight = document.getElementById("highlight");
-const lineNumbers = document.getElementById("line-numbers");
-const editorShell = document.querySelector(".editor-shell");
-const workspace = document.querySelector(".workspace");
-const workspaceDivider = document.querySelector(".workspace-divider");
-const activeLine = document.getElementById("active-line");
-const cursorStatus = document.getElementById("cursor-status");
-const documentStatus = document.getElementById("document-status");
-const out = document.getElementById("out");
-const runBtn = document.getElementById("run");
-const importBtn = document.getElementById("import");
-const downloadBtn = document.getElementById("download");
-const openIssieBtn = document.getElementById("open-issie");
-const issieLinkInput = document.getElementById("issie-link");
-const issieLinkAnchor = document.getElementById("issie-link-anchor");
-const issieDialog = document.getElementById("issie-dialog");
-const closeIssieDialogBtn = document.getElementById("close-issie-dialog");
-
-let lastMachineCodeOutput = "";
-let caretRefreshFrame = 0;
-let editorBaseMinHeight = 0;
-let workspaceSplitRatio = null;
-let workspaceResizeFrame = 0;
-
 const DEFAULT_WORKSPACE_SPLIT = 1.45 / (1.45 + 0.9);
 const WORKSPACE_DIVIDER_WIDTH = 16;
 const WORKSPACE_MIN_PANE_WIDTH = 320;
@@ -162,222 +137,18 @@ function highlightAsm(source) {
     .join("\n");
 }
 
-function getLineCount() {
-  return Math.max(1, src.value.split("\n").length);
-}
-
-function updateLineNumbers() {
-  const lineCount = getLineCount();
-  lineNumbers.textContent = Array.from({ length: lineCount }, (_, index) => String(index + 1)).join("\n");
-}
-
-function getCursorPosition() {
-  const position = src.selectionStart ?? 0;
-  const beforeCursor = src.value.slice(0, position).split("\n");
-  const line = beforeCursor.length;
-  const column = beforeCursor[beforeCursor.length - 1].length + 1;
-  return { line, column };
-}
-
-function updateCursorStatus() {
-  const { line, column } = getCursorPosition();
-  cursorStatus.innerHTML = `<strong>Ln ${line}, Col ${column}</strong>`;
-}
-
-function updateDocumentStatus() {
-  const lineCount = getLineCount();
-  const charCount = src.value.length;
-  documentStatus.textContent = `${lineCount} lines | ${charCount} chars | UTF-8`;
-}
-
-function updateEditorHeight() {
-  if (!editorShell) {
-    return;
-  }
-
-  const styles = window.getComputedStyle(src);
-  const lineHeight = Number.parseFloat(styles.lineHeight) || 24;
-  const paddingTop = Number.parseFloat(styles.paddingTop) || 0;
-  const paddingBottom = Number.parseFloat(styles.paddingBottom) || 0;
-
-  if (!editorBaseMinHeight) {
-    editorBaseMinHeight = editorShell.getBoundingClientRect().height;
-  }
-
-  const contentHeight = paddingTop + paddingBottom + getLineCount() * lineHeight;
-  const minHeight = Math.max(editorBaseMinHeight, contentHeight);
-  editorShell.style.minHeight = `${minHeight}px`;
-}
-
-function isWorkspaceStacked() {
-  return window.matchMedia("(max-width: 1024px)").matches;
-}
-
-function clampWorkspaceSplit(ratio, availableWidth) {
-  const minRatio = WORKSPACE_MIN_PANE_WIDTH / availableWidth;
-  const maxRatio = 1 - minRatio;
-  return Math.min(Math.max(ratio, minRatio), maxRatio);
-}
-
-function applyWorkspaceSplit() {
-  if (!workspace || !workspaceDivider) {
-    return;
-  }
-
-  if (isWorkspaceStacked()) {
-    workspace.style.gridTemplateColumns = "";
-    return;
-  }
-
-  if (workspaceSplitRatio === null) {
-    return;
-  }
-
-  const workspaceWidth = workspace.getBoundingClientRect().width;
-  const availableWidth = workspaceWidth - WORKSPACE_DIVIDER_WIDTH;
-  const ratio = clampWorkspaceSplit(workspaceSplitRatio, availableWidth);
-  const editorWidth = availableWidth * ratio;
-
-  workspaceSplitRatio = ratio;
-  workspace.style.gridTemplateColumns = `${editorWidth}px ${WORKSPACE_DIVIDER_WIDTH}px minmax(${WORKSPACE_MIN_PANE_WIDTH}px, 1fr)`;
-  workspaceDivider.setAttribute("aria-valuenow", String(Math.round(ratio * 100)));
-  workspaceDivider.setAttribute("aria-valuetext", `${Math.round(ratio * 100)}% editor width`);
-}
-
-function setWorkspaceSplitFromPointer(clientX, pointerOffset) {
-  if (!workspace) {
-    return;
-  }
-
-  const workspaceRect = workspace.getBoundingClientRect();
-  const availableWidth = workspaceRect.width - WORKSPACE_DIVIDER_WIDTH;
-  const editorWidth = clientX - workspaceRect.left - pointerOffset;
-
-  workspaceSplitRatio = clampWorkspaceSplit(editorWidth / availableWidth, availableWidth);
-  applyWorkspaceSplit();
-}
-
-function handleWorkspaceDividerPointerDown(event) {
-  if (!workspace || !workspaceDivider || isWorkspaceStacked() || event.button !== 0) {
-    return;
-  }
-
-  event.preventDefault();
-
-  const dividerRect = workspaceDivider.getBoundingClientRect();
-  const pointerOffset = event.clientX - dividerRect.left;
-
-  workspace.classList.add("is-resizing");
-  document.body.classList.add("is-resizing");
-  workspaceDivider.setPointerCapture?.(event.pointerId);
-
-  const handlePointerMove = (moveEvent) => {
-    setWorkspaceSplitFromPointer(moveEvent.clientX, pointerOffset);
-  };
-
-  const stopDragging = () => {
-    workspace.classList.remove("is-resizing");
-    document.body.classList.remove("is-resizing");
-    window.removeEventListener("pointermove", handlePointerMove);
-    window.removeEventListener("pointerup", stopDragging);
-    window.removeEventListener("pointercancel", stopDragging);
-    workspaceDivider.releasePointerCapture?.(event.pointerId);
-  };
-
-  window.addEventListener("pointermove", handlePointerMove);
-  window.addEventListener("pointerup", stopDragging);
-  window.addEventListener("pointercancel", stopDragging);
-  setWorkspaceSplitFromPointer(event.clientX, pointerOffset);
-}
-
-function handleWorkspaceDividerKeydown(event) {
-  if (!workspaceDivider || isWorkspaceStacked()) {
-    return;
-  }
-
-  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
-    return;
-  }
-
-  event.preventDefault();
-
-  if (workspaceSplitRatio === null) {
-    workspaceSplitRatio = DEFAULT_WORKSPACE_SPLIT;
-  }
-
-  const amount = event.shiftKey ? 0.05 : 0.02;
-  workspaceSplitRatio += event.key === "ArrowRight" ? amount : -amount;
-  applyWorkspaceSplit();
-}
-
-function updateActiveLine() {
-  const { line } = getCursorPosition();
-  const styles = window.getComputedStyle(src);
-  const lineHeight = Number.parseFloat(styles.lineHeight) || 24;
-  const paddingTop = Number.parseFloat(styles.paddingTop) || 0;
-  const top = paddingTop + (line - 1) * lineHeight - src.scrollTop;
-
-  activeLine.style.top = `${top}px`;
-  activeLine.style.height = `${lineHeight}px`;
-}
-
-function refreshCaretUi() {
-  updateCursorStatus();
-  updateActiveLine();
-}
-
-function scheduleCaretUiRefresh() {
-  if (caretRefreshFrame) {
-    cancelAnimationFrame(caretRefreshFrame);
-  }
-
-  caretRefreshFrame = window.requestAnimationFrame(() => {
-    caretRefreshFrame = 0;
-    refreshCaretUi();
-  });
-}
-
-function syncEditor() {
-  highlight.innerHTML = `${highlightAsm(src.value)}\n`;
-  highlight.scrollTop = src.scrollTop;
-  highlight.scrollLeft = src.scrollLeft;
-  lineNumbers.scrollTop = src.scrollTop;
-  updateLineNumbers();
-  updateEditorHeight();
-  refreshCaretUi();
-  updateDocumentStatus();
-}
-
-function updateIssieLink(url = "") {
-  issieLinkInput.value = url;
-
-  if (url) {
-    issieLinkAnchor.href = url;
-    issieLinkAnchor.hidden = false;
-    return;
-  }
-
-  issieLinkAnchor.href = "#";
-  issieLinkAnchor.hidden = true;
-}
-
-function clearCompiledArtifacts() {
-  lastMachineCodeOutput = "";
-  updateIssieLink("");
-}
-
 function parseAddressToken(token) {
   return /^0x/i.test(token) || /[a-f]/i.test(token)
     ? Number.parseInt(token.replace(/^0x/i, ""), 16)
     : Number.parseInt(token, 10);
 }
 
-function parseMachineCodeWords(machineCodeText, { sortByAddress = true } = {}) {
+function parseMachineCodeWords(machineCodeText) {
   if (!machineCodeText.trim()) {
     return [];
   }
 
-  const entries = machineCodeText
+  return machineCodeText
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
@@ -401,39 +172,10 @@ function parseMachineCodeWords(machineCodeText, { sortByAddress = true } = {}) {
       };
     })
     .filter((entry) => entry !== null);
-
-  return sortByAddress
-    ? entries.sort((left, right) => left.address - right.address)
-    : entries;
-}
-
-function findAssemblyCommentStart(line) {
-  let quote = null;
-
-  for (let index = 0; index < line.length; index += 1) {
-    const char = line[index];
-    const next = line[index + 1] || "";
-    const prev = index > 0 ? line[index - 1] : "";
-
-    if ((char === '"' || char === "'") && prev !== "\\") {
-      if (quote === char) {
-        quote = null;
-      } else if (!quote) {
-        quote = char;
-      }
-      continue;
-    }
-
-    if (!quote && (char === ";" || (char === "/" && next === "/"))) {
-      return index;
-    }
-  }
-
-  return -1;
 }
 
 function sourceLineProducesMachineCode(line) {
-  const commentStart = findAssemblyCommentStart(line);
+  const commentStart = findCommentStart(line);
   const code = (commentStart >= 0 ? line.slice(0, commentStart) : line)
     .replace(/^\s*[A-Za-z_][A-Za-z0-9_]*:\s*/, "")
     .trim();
@@ -457,256 +199,365 @@ function formatMachineCodeEntry(entry) {
   return `${address} 0x${entry.word}`;
 }
 
-function renderMachineCodeOutput(machineCodeText) {
-  const sourceLines = src.value.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
-  const entries = parseMachineCodeWords(machineCodeText, { sortByAddress: false });
-  let entryIndex = 0;
+export function mountEditor(workspace, onResult) {
+  const src = workspace.querySelector("#src");
+  const highlight = workspace.querySelector("#highlight");
+  const lineNumbers = workspace.querySelector("#line-numbers");
+  const editorShell = workspace.querySelector(".editor-shell");
+  const workspaceDivider = workspace.querySelector(".workspace-divider");
+  const activeLine = workspace.querySelector("#active-line");
+  const cursorStatus = workspace.querySelector("#cursor-status");
+  const documentStatus = workspace.querySelector("#document-status");
+  const out = workspace.querySelector("#out");
+  const listeners = new AbortController();
+  const { signal } = listeners;
+  let lastMachineCodeOutput = "";
+  let caretRefreshFrame = 0;
+  let editorBaseMinHeight = 0;
+  let workspaceSplitRatio = null;
+  let workspaceResizeFrame = 0;
 
-  const rows = sourceLines.map((sourceLine, index) => {
-    const hasMachineCode = sourceLineProducesMachineCode(sourceLine);
-    const entry = hasMachineCode ? entries[entryIndex++] : null;
-    const codeLabel = entry ? formatMachineCodeEntry(entry) : "—";
-    const rowClass = entry ? "output-row" : "output-row output-empty";
-
-    return `<div class="${rowClass}" role="row">
-      <span class="output-line" role="cell">${index + 1}</span>
-      <code class="output-code" role="cell">${escapeHtml(codeLabel)}</code>
-    </div>`;
-  });
-
-  while (entryIndex < entries.length) {
-    const entry = entries[entryIndex++];
-    rows.push(`<div class="output-row" role="row">
-      <span class="output-line" role="cell">—</span>
-      <code class="output-code" role="cell">${escapeHtml(formatMachineCodeEntry(entry))}</code>
-    </div>`);
+  function getLineCount() {
+    return Math.max(1, src.value.split("\n").length);
   }
 
-  out.innerHTML = rows.join("");
-}
-
-function renderOutputMessage(message) {
-  out.innerHTML = `<pre class="output-message">${escapeHtml(message)}</pre>`;
-}
-
-function buildIssieUrl(demo) {
-  const words = parseMachineCodeWords(lastMachineCodeOutput);
-
-  if (words.length === 0) {
-    return null;
+  function updateLineNumbers() {
+    const lineCount = getLineCount();
+    lineNumbers.textContent = Array.from({ length: lineCount }, (_, index) => String(index + 1)).join("\n");
   }
 
-  const code = words.map((entry) => entry.word).join("");
-  return `https://lwzsama.github.io/issie-web/#demo=${demo}&code=${code}`;
-}
-
-function warnMissingMachineCode() {
-  window.alert("No assembled machine code is available. Run Assemble successfully first.");
-}
-
-function openIssieDialog() {
-  if (!lastMachineCodeOutput.trim()) {
-    warnMissingMachineCode();
-    return;
+  function getCursorPosition() {
+    const position = src.selectionStart ?? 0;
+    const beforeCursor = src.value.slice(0, position).split("\n");
+    const line = beforeCursor.length;
+    const column = beforeCursor[beforeCursor.length - 1].length + 1;
+    return { line, column };
   }
 
-  if (typeof issieDialog.showModal === "function") {
-    issieDialog.showModal();
-    return;
+  function updateCursorStatus() {
+    const { line, column } = getCursorPosition();
+    cursorStatus.innerHTML = `<strong>Ln ${line}, Col ${column}</strong>`;
   }
 
-  const selected = window.prompt(
-    "Choose a CPU demo: 3 = Normal EEP1 CPU, 6 = EEP1 CPU with Pipeline, 7 = EEP1 CPU with Interupt",
-    "3"
-  );
-
-  if (selected === "3" || selected === "6" || selected === "7") {
-    handleIssieSelection(selected);
-  }
-}
-
-function handleIssieSelection(demo) {
-  const url = buildIssieUrl(demo);
-
-  if (!url) {
-    warnMissingMachineCode();
-    return;
+  function updateDocumentStatus() {
+    const lineCount = getLineCount();
+    const charCount = src.value.length;
+    documentStatus.textContent = `${lineCount} lines | ${charCount} chars | UTF-8`;
   }
 
-  updateIssieLink(url);
-  window.open(url, "_blank", "noopener,noreferrer");
-}
-
-function assembleSource() {
-  try {
-    const res = assembleText(src.value);
-
-    if (res && res.tag === 0) {
-      lastMachineCodeOutput = res.fields[0];
-      updateIssieLink("");
-      renderMachineCodeOutput(lastMachineCodeOutput);
-      return true;
-    }
-
-    if (res && res.tag === 1) {
-      clearCompiledArtifacts();
-      renderOutputMessage(`ERROR\n${res.fields[0]}`);
-      return false;
-    }
-
-    clearCompiledArtifacts();
-    renderOutputMessage(`Unknown result: ${String(res)}`);
-    return false;
-  } catch (error) {
-    clearCompiledArtifacts();
-    renderOutputMessage(`JavaScript error\n${error && error.stack ? error.stack : String(error)}`);
-    return false;
-  }
-}
-
-async function importTxt() {
-  const input = document.createElement("input");
-  input.type = "file";
-  input.accept = ".txt,.asm,text/plain";
-
-  input.onchange = async () => {
-    const file = input.files?.[0];
-    if (!file) {
+  function updateEditorHeight() {
+    if (!editorShell) {
       return;
     }
 
-    src.value = await file.text();
-    clearCompiledArtifacts();
-    syncEditor();
-  };
+    const styles = window.getComputedStyle(src);
+    const lineHeight = Number.parseFloat(styles.lineHeight) || 24;
+    const paddingTop = Number.parseFloat(styles.paddingTop) || 0;
+    const paddingBottom = Number.parseFloat(styles.paddingBottom) || 0;
 
-  input.click();
-}
+    if (!editorBaseMinHeight) {
+      editorBaseMinHeight = editorShell.getBoundingClientRect().height;
+    }
 
-async function saveRam() {
-  const content = lastMachineCodeOutput.trim();
-
-  if (!content) {
-    renderOutputMessage("Run Assemble first to generate machine code before exporting.");
-    return;
+    const contentHeight = paddingTop + paddingBottom + getLineCount() * lineHeight;
+    const minHeight = Math.max(editorBaseMinHeight, contentHeight);
+    editorShell.style.minHeight = `${minHeight}px`;
   }
 
-  const filename = `machine-code-${new Date().toISOString().slice(0, 19).replaceAll(":", "-")}.ram`;
+  function isWorkspaceStacked() {
+    return window.matchMedia("(max-width: 1024px)").matches;
+  }
 
-  if (window.showSaveFilePicker) {
-    const handle = await window.showSaveFilePicker({
-      suggestedName: filename,
-      types: [{
-        description: "RAM text file",
-        accept: { "text/plain": [".ram"] }
-      }]
+  function clampWorkspaceSplit(ratio, availableWidth) {
+    const minRatio = WORKSPACE_MIN_PANE_WIDTH / availableWidth;
+    const maxRatio = 1 - minRatio;
+    return Math.min(Math.max(ratio, minRatio), maxRatio);
+  }
+
+  function applyWorkspaceSplit() {
+    if (!workspace || !workspaceDivider) {
+      return;
+    }
+
+    if (isWorkspaceStacked()) {
+      workspace.style.gridTemplateColumns = "";
+      return;
+    }
+
+    if (workspaceSplitRatio === null) {
+      return;
+    }
+
+    const workspaceWidth = workspace.getBoundingClientRect().width;
+    const availableWidth = workspaceWidth - WORKSPACE_DIVIDER_WIDTH;
+    const ratio = clampWorkspaceSplit(workspaceSplitRatio, availableWidth);
+    const editorWidth = availableWidth * ratio;
+
+    workspaceSplitRatio = ratio;
+    workspace.style.gridTemplateColumns = `${editorWidth}px ${WORKSPACE_DIVIDER_WIDTH}px minmax(${WORKSPACE_MIN_PANE_WIDTH}px, 1fr)`;
+    workspaceDivider.setAttribute("aria-valuenow", String(Math.round(ratio * 100)));
+    workspaceDivider.setAttribute("aria-valuetext", `${Math.round(ratio * 100)}% editor width`);
+  }
+
+  function setWorkspaceSplitFromPointer(clientX, pointerOffset) {
+    if (!workspace) {
+      return;
+    }
+
+    const workspaceRect = workspace.getBoundingClientRect();
+    const availableWidth = workspaceRect.width - WORKSPACE_DIVIDER_WIDTH;
+    const editorWidth = clientX - workspaceRect.left - pointerOffset;
+
+    workspaceSplitRatio = clampWorkspaceSplit(editorWidth / availableWidth, availableWidth);
+    applyWorkspaceSplit();
+  }
+
+  function handleWorkspaceDividerPointerDown(event) {
+    if (!workspace || !workspaceDivider || isWorkspaceStacked() || event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+
+    const dividerRect = workspaceDivider.getBoundingClientRect();
+    const pointerOffset = event.clientX - dividerRect.left;
+
+    workspace.classList.add("is-resizing");
+    document.body.classList.add("is-resizing");
+    workspaceDivider.setPointerCapture?.(event.pointerId);
+
+    const handlePointerMove = (moveEvent) => {
+      setWorkspaceSplitFromPointer(moveEvent.clientX, pointerOffset);
+    };
+
+    const stopDragging = () => {
+      workspace.classList.remove("is-resizing");
+      document.body.classList.remove("is-resizing");
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopDragging);
+      window.removeEventListener("pointercancel", stopDragging);
+      workspaceDivider.releasePointerCapture?.(event.pointerId);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove, { signal });
+    window.addEventListener("pointerup", stopDragging, { signal });
+    window.addEventListener("pointercancel", stopDragging, { signal });
+    setWorkspaceSplitFromPointer(event.clientX, pointerOffset);
+  }
+
+  function handleWorkspaceDividerKeydown(event) {
+    if (!workspaceDivider || isWorkspaceStacked()) {
+      return;
+    }
+
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+      return;
+    }
+
+    event.preventDefault();
+
+    if (workspaceSplitRatio === null) {
+      workspaceSplitRatio = DEFAULT_WORKSPACE_SPLIT;
+    }
+
+    const amount = event.shiftKey ? 0.05 : 0.02;
+    workspaceSplitRatio += event.key === "ArrowRight" ? amount : -amount;
+    applyWorkspaceSplit();
+  }
+
+  function updateActiveLine() {
+    const { line } = getCursorPosition();
+    const styles = window.getComputedStyle(src);
+    const lineHeight = Number.parseFloat(styles.lineHeight) || 24;
+    const paddingTop = Number.parseFloat(styles.paddingTop) || 0;
+    const top = paddingTop + (line - 1) * lineHeight - src.scrollTop;
+
+    activeLine.style.top = `${top}px`;
+    activeLine.style.height = `${lineHeight}px`;
+  }
+
+  function refreshCaretUi() {
+    updateCursorStatus();
+    updateActiveLine();
+  }
+
+  function scheduleCaretUiRefresh() {
+    if (caretRefreshFrame) {
+      cancelAnimationFrame(caretRefreshFrame);
+    }
+
+    caretRefreshFrame = window.requestAnimationFrame(() => {
+      caretRefreshFrame = 0;
+      refreshCaretUi();
+    });
+  }
+
+  function syncEditor() {
+    highlight.innerHTML = `${highlightAsm(src.value)}\n`;
+    highlight.scrollTop = src.scrollTop;
+    highlight.scrollLeft = src.scrollLeft;
+    lineNumbers.scrollTop = src.scrollTop;
+    updateLineNumbers();
+    updateEditorHeight();
+    refreshCaretUi();
+    updateDocumentStatus();
+  }
+
+  function renderMachineCodeOutput(machineCodeText) {
+    const sourceLines = src.value.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+    const entries = parseMachineCodeWords(machineCodeText);
+    let entryIndex = 0;
+
+    const rows = sourceLines.map((sourceLine, index) => {
+      const hasMachineCode = sourceLineProducesMachineCode(sourceLine);
+      const entry = hasMachineCode ? entries[entryIndex++] : null;
+      const codeLabel = entry ? formatMachineCodeEntry(entry) : "—";
+      const rowClass = entry ? "output-row" : "output-row output-empty";
+
+      return `<div class="${rowClass}" role="row">
+        <span class="output-line" role="cell">${index + 1}</span>
+        <code class="output-code" role="cell">${escapeHtml(codeLabel)}</code>
+      </div>`;
     });
 
-    const writable = await handle.createWritable();
-    await writable.write(content);
-    await writable.close();
-    return;
+    while (entryIndex < entries.length) {
+      const entry = entries[entryIndex++];
+      rows.push(`<div class="output-row" role="row">
+        <span class="output-line" role="cell">—</span>
+        <code class="output-code" role="cell">${escapeHtml(formatMachineCodeEntry(entry))}</code>
+      </div>`);
+    }
+
+    out.innerHTML = rows.join("");
   }
 
-  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.click();
-  URL.revokeObjectURL(url);
-}
-
-function handleEditorKeydown(event) {
-  if (event.key === "Tab") {
-    event.preventDefault();
-
-    const start = src.selectionStart ?? 0;
-    const end = src.selectionEnd ?? 0;
-    const insertion = "  ";
-
-    src.value = `${src.value.slice(0, start)}${insertion}${src.value.slice(end)}`;
-    src.selectionStart = start + insertion.length;
-    src.selectionEnd = start + insertion.length;
-    syncEditor();
-    return;
+  function renderOutputMessage(message) {
+    out.innerHTML = `<pre class="output-message">${escapeHtml(message)}</pre>`;
   }
 
-  if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-    event.preventDefault();
-    assembleSource();
+  function clearCompiledArtifacts() {
+    lastMachineCodeOutput = "";
+    onResult("");
   }
-}
 
-runBtn.addEventListener("click", assembleSource);
-importBtn.addEventListener("click", () => {
-  importTxt().catch((error) => {
-    renderOutputMessage(`Import failed\n${error?.message || String(error)}`);
-  });
-});
+  function assembleSource() {
+    try {
+      const res = assembleText(src.value);
 
-downloadBtn.addEventListener("click", () => {
-  saveRam().catch((error) => {
-    if (error?.name === "AbortError") {
+      if (res && res.tag === 0) {
+        lastMachineCodeOutput = res.fields[0];
+        onResult(lastMachineCodeOutput);
+        renderMachineCodeOutput(lastMachineCodeOutput);
+        return true;
+      }
+
+      if (res && res.tag === 1) {
+        clearCompiledArtifacts();
+        renderOutputMessage(`ERROR\n${res.fields[0]}`);
+        return false;
+      }
+
+      clearCompiledArtifacts();
+      renderOutputMessage(`Unknown result: ${String(res)}`);
+      return false;
+    } catch (error) {
+      clearCompiledArtifacts();
+      renderOutputMessage(`JavaScript error\n${error && error.stack ? error.stack : String(error)}`);
+      return false;
+    }
+  }
+
+  async function saveRam() {
+    const content = lastMachineCodeOutput.trim();
+
+    if (!content) {
+      renderOutputMessage("Run Assemble first to generate machine code before exporting.");
       return;
     }
 
-    renderOutputMessage(`Export failed\n${error?.message || String(error)}`);
-  });
-});
+    const filename = `machine-code-${new Date().toISOString().slice(0, 19).replaceAll(":", "-")}.ram`;
 
-openIssieBtn.addEventListener("click", openIssieDialog);
+    if (window.showSaveFilePicker) {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: filename,
+        types: [{
+          description: "RAM text file",
+          accept: { "text/plain": [".ram"] }
+        }]
+      });
 
-workspaceDivider?.addEventListener("pointerdown", handleWorkspaceDividerPointerDown);
-workspaceDivider?.addEventListener("keydown", handleWorkspaceDividerKeydown);
-window.addEventListener("resize", () => {
-  if (workspaceResizeFrame) {
-    cancelAnimationFrame(workspaceResizeFrame);
-  }
-
-  workspaceResizeFrame = window.requestAnimationFrame(() => {
-    workspaceResizeFrame = 0;
-    applyWorkspaceSplit();
-  });
-});
-
-closeIssieDialogBtn.addEventListener("click", () => {
-  issieDialog.close();
-});
-
-issieDialog.addEventListener("click", (event) => {
-  if (event.target === issieDialog) {
-    issieDialog.close();
-  }
-});
-
-issieDialog.querySelectorAll("[data-demo]").forEach((button) => {
-  button.addEventListener("click", () => {
-    const demo = button.getAttribute("data-demo");
-
-    issieDialog.close();
-
-    if (demo) {
-      handleIssieSelection(demo);
+      const writable = await handle.createWritable();
+      await writable.write(content);
+      await writable.close();
+      return;
     }
-  });
-});
 
-src.addEventListener("input", syncEditor);
-src.addEventListener("input", clearCompiledArtifacts);
-src.addEventListener("scroll", syncEditor);
-src.addEventListener("click", scheduleCaretUiRefresh);
-src.addEventListener("focus", scheduleCaretUiRefresh);
-src.addEventListener("mouseup", scheduleCaretUiRefresh);
-src.addEventListener("keydown", handleEditorKeydown);
-src.addEventListener("keyup", scheduleCaretUiRefresh);
-src.addEventListener("select", scheduleCaretUiRefresh);
-document.addEventListener("selectionchange", () => {
-  if (document.activeElement === src) {
-    scheduleCaretUiRefresh();
+    const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
   }
-});
 
-syncEditor();
-clearCompiledArtifacts();
-assembleSource();
+  function handleEditorKeydown(event) {
+    if (event.key === "Escape") src.blur();
+    if (event.key === "Tab" && !event.shiftKey) {
+      event.preventDefault();
+
+      const start = src.selectionStart ?? 0;
+      const end = src.selectionEnd ?? 0;
+      const insertion = "  ";
+
+      src.value = `${src.value.slice(0, start)}${insertion}${src.value.slice(end)}`;
+      src.selectionStart = start + insertion.length;
+      src.selectionEnd = start + insertion.length;
+      src.dispatchEvent(new Event("input"));
+      return;
+    }
+
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      event.preventDefault();
+      assembleSource();
+    }
+  }
+
+  workspaceDivider.addEventListener("pointerdown", handleWorkspaceDividerPointerDown, { signal });
+  workspaceDivider.addEventListener("keydown", handleWorkspaceDividerKeydown, { signal });
+  window.addEventListener("resize", () => {
+    cancelAnimationFrame(workspaceResizeFrame);
+    workspaceResizeFrame = requestAnimationFrame(applyWorkspaceSplit);
+  }, { signal });
+
+  src.addEventListener("input", () => {
+    syncEditor();
+    clearCompiledArtifacts();
+    renderOutputMessage("Assemble the edited source to update machine code.");
+  }, { signal });
+  src.addEventListener("scroll", syncEditor, { signal });
+  src.addEventListener("keydown", handleEditorKeydown, { signal });
+  for (const type of ["click", "focus", "mouseup", "keyup", "select"]) {
+    src.addEventListener(type, scheduleCaretUiRefresh, { signal });
+  }
+  document.addEventListener("selectionchange", () => {
+    if (document.activeElement === src) scheduleCaretUiRefresh();
+  }, { signal });
+
+  syncEditor();
+  assembleSource();
+  return {
+    assemble: assembleSource,
+    saveRam,
+    setSource(text) {
+      src.value = text;
+      src.dispatchEvent(new Event("input"));
+    },
+    dispose() {
+      listeners.abort();
+      cancelAnimationFrame(caretRefreshFrame);
+      cancelAnimationFrame(workspaceResizeFrame);
+      document.body.classList.remove("is-resizing");
+    },
+  };
+}
