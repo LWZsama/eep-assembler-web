@@ -1,4 +1,4 @@
-export const issieSite = import.meta.env.VITE_ISSIE_WEB_URL || "https://lwzsama.github.io/issie-web/";
+export const issieSite = "https://lwzsama.github.io/issie-web/";
 
 export async function packProject(project, signal) {
   signal.throwIfAborted();
@@ -12,7 +12,7 @@ export async function packProject(project, signal) {
       worker.onerror = event => reject(new Error(event.message || "Could not load the Brotli encoder."));
       worker.postMessage(project);
     });
-    const url = new URL(issieSite, location.href);
+    const url = new URL(issieSite);
     url.hash = "project=" + result.payload;
     return { url: url.href, bytes: result.bytes };
   } finally {

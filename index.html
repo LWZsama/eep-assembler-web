@@ -5,10 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#0a0a0a" />
     <title>EEP1 Assembler</title>
-    <link rel="icon" href="./favicon.ico" />
+    <link rel="icon" type="image/png" href="./favicon.png" />
   </head>
-  <body>
-    <div id="root"></div>
+  <body class="flex flex-col">
+    <div id="root" class="flex-1"></div>
+    <footer class="px-5 pb-6 text-center text-xs text-muted-foreground">
+      Built with <a href="https://ui.shadcn.com" target="_blank" rel="noopener noreferrer" class="underline underline-offset-4 hover:text-foreground">shadcn/ui</a>.
+    </footer>
     <script type="module" src="./src/app.jsx"></script>
   </body>
 </html>
